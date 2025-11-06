@@ -12,7 +12,7 @@
             "latestVersion": "v0.9.5",
             "versions": [
                 {
-                    "version": "0.9.0",
+                    "version": "v0.9.5",
                     "developmentStage": "GA",
                     "shellVersionMin": "8.4.0",
                     "shellVersionMax": "8.4.99",
