@@ -122,10 +122,10 @@ export PROXYSQL_SYNC_CONFIG="/path/to/your/config.ini"
    ```python
    \py
    # Using default config file location
-   proxysql = mysqlsh.plugins.dbs_proxysql_admin.create()
+   proxysql = dbs_proxysql_admin.create()
    
    # Or specify a custom config file
-   proxysql = mysqlsh.plugins.dbs_proxysql_admin.create("/path/to/config.ini")
+   proxysql = dbs_proxysql_admin.create("/path/to/config.ini")
    ```
 
 ### Available Operations
@@ -157,7 +157,7 @@ Reloads the configuration file (useful for dynamic config changes):
 ```python
 proxysql.reloadConfig()
 # Or reload from a different config file
-proxysql.admin.reloadConfig("/path/to/new/config.ini")
+proxysql.reloadConfig("/path/to/new/config.ini")
 ```
 
 ### Example Workflow
@@ -186,7 +186,7 @@ proxysql.deleteOrphans()
 // Connect to MySQL
 \connect user@mysql-host:3306
 
-proxysql = mysqlsh.plugins.dbs_proxysql_admin.create()
+proxysql = dbs_proxysql_admin.create()
 proxysql.userSync()
 
 ```
