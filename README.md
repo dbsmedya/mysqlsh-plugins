@@ -56,10 +56,10 @@ mysqlsh
 ```
 
 In MySQL Shell:
-```javascript
+```python
 // Check if plugin is available
 MySQL Shell > \py
-MySQL Shell > help(dbs_proxysql_admin)
+MySQL Shell Py> dbs_proxysql_admin.help()
 ```
 
 ## Configuration
