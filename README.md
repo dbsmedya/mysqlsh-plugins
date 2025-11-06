@@ -239,6 +239,30 @@ proxysql.userSync()
    - Connect to MySQL server first using `\connect`
    - Ensure the MySQL connection is active
 
+5. **User 'admin' can only connect locally**
+   ````
+   Failed to connect to ProxySQL: MySQL Error (1040): Shell.open_session: User 'admin' can only connect locally
+   ````
+   - Proxysql only allows 'admin' username to be connect from localhost. Create another remote admin user and password for Proxysql in username:password format.
+
+   ```sql
+   MySQL [(none)]> set admin-admin_credentials='admin:admin;radmin:remoteAdminPassword';
+   Query OK, 1 row affected (0.001 sec)
+
+   MySQL [(none)]> save admin variables to disk;
+   Query OK, 50 rows affected (0.007 sec)
+
+   MySQL [(none)]> load admin variables to runtime;
+   Query OK, 0 rows affected (0.003 sec)
+   ````
+
+   - Update the proxysql_config.ini with new credentials. 
+   ```ini
+    [proxysql]
+    user = radmin
+    password = remoteAdminPassword
+   ```
+
 ### Debug Mode
 
 Enable verbose output by checking the plugin logs:
@@ -249,7 +273,7 @@ import logging
 logging.basicConfig(level=logging.DEBUG)
 
 # Then run your admin operations
-proxysql = mysqlsh.plugins.dbs_proxysql_admin.create()
+proxysql = dbs_proxysql_admin.create()
 proxysql.userSync()
 ```
 
