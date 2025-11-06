@@ -5,9 +5,9 @@
     },
     "plugins": [
         {
-            "name": "proxysql_user_admin",
-            "moduleName": "proxysql_user_admin",
-            "caption": "ProxySQL User Admin",
+            "name": "dbs_proxysql_admin",
+            "moduleName": "dbs_proxysql_admin",
+            "caption": "DBS ProxySQL User Admin",
             "description": "A plugin to manage user synchronization between MySQL and ProxySQL.",
             "latestVersion": "v0.9.5",
             "versions": [
