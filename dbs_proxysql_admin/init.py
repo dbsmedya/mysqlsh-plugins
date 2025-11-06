@@ -38,7 +38,3 @@ def create(config_path: Optional[str] = None):
         "deleteOrphans": lambda: admin.delete_orphans(),
         "reloadConfig": lambda: admin.reload_config(),
     }
-
-@plugin_function("dbs_proxysql_admin.userSync")
-def user_sync():
-    pass
