@@ -47,6 +47,45 @@ export MYSQLSH_USER_CONFIG_HOME=/path/to/plugins/
    ```
 3. Copy all files from `dbs_proxysql_admin/` to the created directory
 
+### Method 3:  Repo Installation from github
+
+1. In MySQL Shell add the reprository name as github/dbsmedya/mysqlsh-plugin
+```
+\js
+MySQL JS > plugins.repositories.add('github/dbsmedya/mysqlsh-plugins/')
+
+Repository : DBS MySQL Shell Tools
+Description: A small repository for MySQL Shell plugins.
+URL: https://raw.githubusercontent.com/dbsmedya/mysqlsh-plugins/master/mysql-shell-plugins-manifest.json
+
+The repository contains the following plugins:
+
+  - DBS ProxySQL User Admin
+
+Are you sure you want to add the repository 'DBS MySQL Shell Tools' [yes/NO]: yes
+Fetching current user repositories...
+Adding repository 'DBS MySQL Shell Tools'...
+Repository 'DBS MySQL Shell Tools' successfully added.
+```
+2. Install the plugin
+```
+MySQL JS > plugins.install()
+Fetching list of available plugins for installation...
+
+   # Name                 Caption                            Version          Installed
+---- -------------------- ---------------------------------- ---------------- ----------------
+   1 mds                  MDS Plugin                         0.1.14 PREVIEW   No
+   2 mrs                  MRS Plugin                         0.1.27 PREVIEW   No
+   3 dbs_proxysql_admin   DBS ProxySQL User Admin            v0.9.5 GA        No
+
+Please enter the index or name of a plugin: 3
+
+Installing DBS ProxySQL User Admin ...
+DBS ProxySQL User Admin has been installed successfully.
+
+Please restart the shell to load the plugin. To get help type  '\? proxysql_user_admin' after restart.
+```
+
 ### Verify Installation
 
 Start MySQL Shell and verify the plugin is loaded:
