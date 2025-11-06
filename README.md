@@ -168,7 +168,7 @@ proxysql.reloadConfig("/path/to/new/config.ini")
 \connect root@localhost:3306
 
 # Create admin instance
-proxysql = mysqlsh.plugins.dbs_proxysql_admin.create()
+proxysql = dbs_proxysql_admin.create()
 
 # Perform initial full sync
 proxysql.userSync()
