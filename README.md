@@ -243,7 +243,7 @@ proxysql.userSync()
    ````
    Failed to connect to ProxySQL: MySQL Error (1040): Shell.open_session: User 'admin' can only connect locally
    ````
-   - Proxysql only allows 'admin' username to be connect from localhost. Create another remote admin user and password for Proxysql in username:password format.
+   - Proxysql only allows 'admin' username to connect from localhost. Create another remote admin user and password for Proxysql in username:password format.
 
    ```sql
    MySQL [(none)]> set admin-admin_credentials='admin:admin;radmin:remoteAdminPassword';
