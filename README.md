@@ -1,354 +1,77 @@
-# MySQL Shell ProxySQL Admin Plugin
+# DBS MySQL Shell Plugins
 
-A MySQL Shell plugin for synchronizing MySQL users with ProxySQL. This plugin provides utilities to manage user synchronization between your MySQL server and ProxySQL user management layer.
+MySQL Shell plugins maintained by [DBS Medya](https://dbsmedya.com).
 
-This tool is inspired by https://github.com/lefred/mysqlshell-plugins/tree/master/proxysql. Lefred's implementation refers to a historic ProxySQL version and does not support [caching_sha2_passwords](https://dev.mysql.com/doc/refman/8.4/en/caching-sha2-pluggable-authentication.html) for MySQL LTS 8.4 series. 
+## Plugin architecture
 
-Percona PXC also has a quite powerful [ProxySQL admin tool](https://github.com/percona/proxysql-admin-tool) for their PXC build which supports Galera replication. 
+MySQL Shell plugins are Python packages that the shell auto-loads from
+`<user-config-home>/plugins/`. Each plugin is a self-contained folder with an
+`__init__.py` bootstrap and an `init.py` that uses the `@plugin` /
+`@plugin_function` decorators to register objects and functions into the shell's
+global namespace. The same registered command works identically in the
+interactive shell (`\py` / `\js`) and from the command line
+(`mysqlsh -- <object> <command> …`); only the function-name casing follows the
+active language — snake_case in Python (`user_sync`), camelCase in JavaScript
+(`userSync`), while the object path itself reads the same in both.
 
-ProxySQL version > 2.7 has now built-in support for [MySQL Group Replication (GR) Bootstrap Mode](https://proxysql.com/documentation/proxysql-bootstrap-mode/), so if you use GR, prefer ProxySQL's built-in method.
+DBS plugins in this repository share a single top-level `dbs` brand object.
+MySQL Shell reuses an existing top-level object when another plugin re-declares
+it, so multiple plugin folders can hang branches off the same namespace —
+`dbs.proxysql.*` today, `dbs.performance.*` or others later — without any of them
+claiming a generic global. The repository also doubles as a MySQL Shell *plugin
+repository*: the `mysql-shell-plugins-manifest.json` at the repo root lets users
+register it with `plugins.repositories.add('github/dbsmedya/mysqlsh-plugins/')`
+and install a plugin with `plugins.install()`, which downloads the versioned
+release archive and extracts it into `<user-config-home>/plugins/<moduleName>/`.
+Releases are built and published automatically from the `master` branch; `main`
+carries development and test features.
 
-There are also modules written in Python and other languages which will support those functions, but this tool was developed to achieve no dependency for 3rd party python libraries, mostly restricted on production database environments. It only uses MySQL Shell's built-in mysql session for connecting to the ProxySQL admin interface via MySQL protocol.
+## Plugins
 
-This version works with [caching_sha2_passwords](https://proxysql.com/documentation/password-management/)  supported by ProxySQL > 2.6 or later. Upcomming release will support MySQL [Dual-Passwords](https://dev.mysql.com/doc/refman/8.4/en/password-management.html#dual-passwords) as well
+### dbs_proxysql_admin
 
-## Features
+Synchronizes MySQL user accounts into ProxySQL — full sync, password-only
+updates, and orphan cleanup — with support for multiple ProxySQL targets (one
+config file per server, switchable at runtime) and an interactive setup wizard.
+Commands live under `dbs.proxysql.admin` (`userSync`, `updatePasswords`,
+`deleteOrphans`, `reloadConfig`, `status`, `useConfig`, `createConfig`, …); the
+legacy `dbs_proxysql_admin.create()` factory is kept for backward compatibility.
+It has no third-party Python dependencies and syncs `caching_sha2_password`
+hashes (ProxySQL ≥ 2.6 / MySQL 8.4 LTS).
 
-- **Full User Sync**: Synchronize all MySQL users to ProxySQL (insert new users and update existing passwords)
-- **Password Updates**: Update ProxySQL passwords for existing users when they change in MySQL
-- **Orphan Cleanup**: Delete ProxySQL users that no longer exist in MySQL
-- **Configuration Management**: Flexible configuration file support with environment variable overrides
-- **User Filtering**: Exclude system users and other unwanted accounts from synchronization
+📖 **Full documentation:** [dbs_proxysql_admin/README.md](dbs_proxysql_admin/README.md)
 
-## Prerequisites
+## Installing a plugin
 
-- MySQL Shell 8.4 or later
-- Access to both MySQL server and ProxySQL admin interface
+**From this repository (recommended):**
 
-## Installation
-
-### Method 1: Clone Repository
-
-```bash
-# Clone the repository to your MySQL Shell plugins directory
-git clone https://github.com/dbsmedya/mysqlsh-plugins.git ~/.mysqlsh/plugins/
-
-# Or clone to a custom location and set MYSQLSH_USER_CONFIG_HOME
-git clone https://github.com/dbsmedya/mysqlsh-plugins.git /path/to/plugins/
-export MYSQLSH_USER_CONFIG_HOME=/path/to/plugins/
-```
-
-### Method 2: Manual Installation
-
-1. Download the plugin files
-2. Create the plugin directory structure:
-   ```bash
-   mkdir -p ~/.mysqlsh/plugins/dbs_proxysql_admin/
-   ```
-3. Copy all files from `dbs_proxysql_admin/` to the created directory
-
-### Method 3:  Repo Installation from github
-
-1. In MySQL Shell add the reprository name as github/dbsmedya/mysqlsh-plugin
-```
+```js
 \js
-MySQL JS > plugins.repositories.add('github/dbsmedya/mysqlsh-plugins/')
-
-Repository : DBS MySQL Shell Tools
-Description: A small repository for MySQL Shell plugins.
-URL: https://raw.githubusercontent.com/dbsmedya/mysqlsh-plugins/master/mysql-shell-plugins-manifest.json
-
-The repository contains the following plugins:
-
-  - DBS ProxySQL User Admin
-
-Are you sure you want to add the repository 'DBS MySQL Shell Tools' [yes/NO]: yes
-Fetching current user repositories...
-Adding repository 'DBS MySQL Shell Tools'...
-Repository 'DBS MySQL Shell Tools' successfully added.
-```
-2. Install the plugin
-```
-MySQL JS > plugins.install()
-Fetching list of available plugins for installation...
-
-   # Name                 Caption                            Version          Installed
----- -------------------- ---------------------------------- ---------------- ----------------
-   1 mds                  MDS Plugin                         0.1.14 PREVIEW   No
-   2 mrs                  MRS Plugin                         0.1.27 PREVIEW   No
-   3 dbs_proxysql_admin   DBS ProxySQL User Admin            v0.9.5 GA        No
-
-Please enter the index or name of a plugin: 3
-
-Installing DBS ProxySQL User Admin ...
-DBS ProxySQL User Admin has been installed successfully.
-
-Please restart the shell to load the plugin. To get help type  '\? proxysql_user_admin' after restart.
+plugins.repositories.add('github/dbsmedya/mysqlsh-plugins/')
+plugins.install()
 ```
 
-### Verify Installation
-
-Start MySQL Shell and verify the plugin is loaded:
+**By cloning:**
 
 ```bash
-mysqlsh
+git clone https://github.com/dbsmedya/mysqlsh-plugins.git ~/.mysqlsh/plugins/
 ```
 
-In MySQL Shell:
-```python
-// Check if plugin is available
-MySQL Shell > \py
-MySQL Shell Py> dbs_proxysql_admin.help()
-```
-
-## Configuration
-
-### Configuration File Setup
-
-The plugin looks for configuration files in the following order:
-
-1. Path specified by `PROXYSQL_SYNC_CONFIG` environment variable
-2. `~/.proxysql_config.ini`
-3. `/etc/proxysql_sync.conf`
-4. `~/.mysqlsh/plugins/dbs_proxysql_admin/proxysql_config.ini` (Example file)
-
-Create a configuration file (e.g., `~/.proxysql_config.ini`):
-
-```ini
-[proxysql]
-# ProxySQL Admin Interface Connection
-host = 127.0.0.1
-port = 6032
-user = admin
-password = admin
-
-# Default hostgroup for new users
-default_hostgroup = 0
-
-# Comma-separated list of MySQL users to exclude from synchronization
-excluded_users = mysql.sys,mysql.session,mysql.infoschema,root,admin
-```
-
-### Configuration Options
-
-| Option | Description | Default |
-|--------|-------------|---------|
-| `host` | ProxySQL admin interface host | `127.0.0.1` |
-| `port` | ProxySQL admin interface port | `6032` |
-| `user` | ProxySQL admin username | `admin` |
-| `password` | ProxySQL admin password | `admin` |
-| `default_hostgroup` | Default hostgroup ID for new users | `0` |
-| `excluded_users` | Comma-separated list of users to exclude | `mysql.sys,mysql.session,mysql.infoschema,root,admin` |
-
-### Environment Variables
-
-You can specify a custom config file location:
-
-```bash
-export PROXYSQL_SYNC_CONFIG="/path/to/your/config.ini"
-```
-
-## Usage
-
-### Basic Usage
-
-1. **Connect to MySQL** in MySQL Shell:
-   ```javascript
-   \connect user@mysql-host:3306
-   ```
-
-2. **Create the plugin instance**:
-   ```python
-   \py
-   # Using default config file location
-   proxysql = dbs_proxysql_admin.create()
-   
-   # Or specify a custom config file
-   proxysql = dbs_proxysql_admin.create("/path/to/config.ini")
-   ```
-
-### Available Operations
-
-#### Full User Synchronization
-Synchronizes all MySQL users to ProxySQL (adds new users and updates existing passwords):
-
-```python
-proxysql.userSync()
-```
-
-#### Update Passwords Only
-Updates passwords in ProxySQL for existing users:
-
-```python
-proxysql.updatePasswords()
-```
-
-#### Delete Orphaned Users
-Removes ProxySQL users that no longer exist in MySQL:
-
-```python
-proxysql.deleteOrphans()
-```
-
-#### Reload Configuration
-Reloads the configuration file (useful for dynamic config changes):
-
-```python
-proxysql.reloadConfig()
-# Or reload from a different config file
-proxysql.reloadConfig("/path/to/new/config.ini")
-```
-
-### Example Workflow
-
-```python
- MySQL 127.0.0.1:3306 ssl SQL >\py
-# Connect to MySQL first
-\connect root@localhost:3306
-
-# Create admin instance
-proxysql = dbs_proxysql_admin.create()
-
-# Perform initial full sync
-proxysql.userSync()
-
-# Later, if passwords change, update them
-proxysql.updatePasswords()
-
-# Clean up users that were removed from MySQL
-proxysql.deleteOrphans()
-```
-
-### JavaScript Usage
-
-```javascript
-// Connect to MySQL
-\connect user@mysql-host:3306
-
-proxysql = dbs_proxysql_admin.create()
-proxysql.userSync()
-
-```
-
-## Security Considerations
-
-1. **Secure Configuration Files**: Store configuration files with restrictive permissions:
-   ```bash
-   chmod 600 ~/.proxysql_config.ini
-   ```
-
-2. **Network Security**: Ensure ProxySQL admin interface is not exposed to untrusted networks
-
-3. **User Filtering**: Review and customize the `excluded_users` list to prevent synchronization of sensitive accounts
-
-4. **Password Management**: Consider using environment variables or secure secret management for passwords
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Plugin Not Found**
-   ```
-   Error: Module 'dbs_proxysql_admin' not found
-   ```
-   - Verify plugin installation path
-   - Check `MYSQLSH_USER_CONFIG_HOME` environment variable
-   - Restart MySQL Shell after installation
-
-2. **Configuration File Not Found**
-   ```
-   FileNotFoundError: No ProxySQL config found
-   ```
-   - Create configuration file in one of the expected locations
-   - Set `PROXYSQL_SYNC_CONFIG` environment variable
-   - Verify file permissions and format
-
-3. **ProxySQL Connection Failed**
-   ```
-   Failed to connect to ProxySQL: Connection refused
-   ```
-   - Verify ProxySQL admin interface is running
-   - Check host, port, username, and password in config
-   - Ensure network connectivity to ProxySQL
-
-4. **MySQL Session Required**
-   ```
-   ValueError: No active MySQL session
-   ```
-   - Connect to MySQL server first using `\connect`
-   - Ensure the MySQL connection is active
-
-5. **User 'admin' can only connect locally**
-   ````
-   Failed to connect to ProxySQL: MySQL Error (1040): Shell.open_session: User 'admin' can only connect locally
-   ````
-   - Proxysql only allows 'admin' username to connect from localhost. Create another remote admin user and password for Proxysql in username:password format.
-
-   ```sql
-   MySQL [(none)]> set admin-admin_credentials='admin:admin;radmin:remoteAdminPassword';
-   Query OK, 1 row affected (0.001 sec)
-
-   MySQL [(none)]> save admin variables to disk;
-   Query OK, 50 rows affected (0.007 sec)
-
-   MySQL [(none)]> load admin variables to runtime;
-   Query OK, 0 rows affected (0.003 sec)
-   ````
-
-   - Update the proxysql_config.ini with new credentials. 
-   ```ini
-    [proxysql]
-    user = radmin
-    password = remoteAdminPassword
-   ```
-
-### Debug Mode
-
-Enable verbose output by checking the plugin logs:
-
-```python
-\py
-import logging
-logging.basicConfig(level=logging.DEBUG)
-
-# Then run your admin operations
-proxysql = dbs_proxysql_admin.create()
-proxysql.userSync()
-```
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature/your-feature`
-3. Make your changes and add tests
-4. Commit your changes: `git commit -am 'Add some feature'`
-5. Push to the branch: `git push origin feature/your-feature`
-6. Submit a pull request
+Restart MySQL Shell after installing. See each plugin's README for configuration
+and usage.
 
 ## License
 
-This project is licensed under the terms specified in the LICENSE file.
-
-## Support
-
-For issues and questions:
-
-1. Check the [troubleshooting section](#troubleshooting)
-2. Search existing issues in the GitHub repository
-3. Create a new issue with detailed information about your problem
-4. Professional support and consulting services are available at [dbsmedya.com](https://dbsmedya.com)
-
+GPL-2.0 — see the [LICENSE](LICENSE) file.
 
 ## Trademarks
 
-- MySQL® is a registered trademark of Oracle Corporation and/or its affiliates
-- MariaDB® is a registered trademark of MariaDB Corporation Ab
-- ProxySQL™ is a trademark of ProxySQL LLC
+- MySQL® is a registered trademark of Oracle Corporation and/or its affiliates.
+- MariaDB® is a registered trademark of MariaDB Corporation Ab.
+- ProxySQL™ is a trademark of ProxySQL LLC.
 
----
+## Support
 
-**Note**: This plugin requires an active MySQL connection in MySQL Shell and proper ProxySQL configuration. Always test in a development environment before using in production.
-
----
-
-**Developed by**: [dbsmedya](https://dbsmedya.com) - Professional MySQL and database consulting services
+Professional MySQL and database consulting services are available at
+[dbsmedya.com](https://dbsmedya.com). For bugs and feature requests, open an
+issue in this repository.
