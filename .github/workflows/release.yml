@@ -1,0 +1,93 @@
+name: Release plugin
+
+# Branching model:
+#   main   - development / test features
+#   master - stable release branch (this workflow runs here)
+#
+# On every push to master this workflow reads the plugin version from
+# mysql-shell-plugins-manifest.json, builds the plugin zip with `git archive`
+# (so the package files sit at the zip root, which is what MySQL Shell's
+# plugins.install() expects), and publishes a GitHub Release whose asset URL
+# matches the manifest's versions[].urls.community. It is idempotent: if the
+# release for the current version already exists, only the asset is refreshed.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "dbs_proxysql_admin/**"
+      - "mysql-shell-plugins-manifest.json"
+      - ".github/workflows/release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout master
+        uses: actions/checkout@v4
+
+      - name: Read version and module from manifest
+        id: m
+        run: |
+          set -euo pipefail
+          file=mysql-shell-plugins-manifest.json
+          version=$(jq -r '.plugins[0].latestVersion' "$file")
+          module=$(jq -r '.plugins[0].moduleName' "$file")
+          url=$(jq -r --arg v "$version" \
+            '.plugins[0].versions[] | select(.version==$v) | .urls.community' "$file")
+          for value in "$version" "$module" "$url"; do
+            if [ -z "$value" ] || [ "$value" = "null" ]; then
+              echo "::error::manifest is missing latestVersion / moduleName / matching version url"
+              exit 1
+            fi
+          done
+          {
+            echo "version=$version"
+            echo "module=$module"
+            echo "url=$url"
+            echo "zip=${module}-${version}.zip"
+            echo "tag=v${version}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Validate manifest URL points at this repo's release asset
+        run: |
+          set -euo pipefail
+          expected="https://github.com/${{ github.repository }}/releases/download/${{ steps.m.outputs.tag }}/${{ steps.m.outputs.zip }}"
+          if [ "${{ steps.m.outputs.url }}" != "$expected" ]; then
+            echo "::error::manifest urls.community does not match the release asset URL"
+            echo "  manifest: ${{ steps.m.outputs.url }}"
+            echo "  expected: $expected"
+            exit 1
+          fi
+
+      - name: Build plugin zip (package files at archive root)
+        run: |
+          set -euo pipefail
+          zip="${{ steps.m.outputs.zip }}"
+          git archive --format=zip -o "$zip" "HEAD:${{ steps.m.outputs.module }}"
+          echo "Zip contents:"
+          unzip -l "$zip"
+          # The package bootstrap files must be at the zip root for install to work.
+          unzip -l "$zip" | grep -qE ' __init__\.py$' || { echo "::error::__init__.py missing at zip root"; exit 1; }
+          unzip -l "$zip" | grep -qE ' init\.py$'     || { echo "::error::init.py missing at zip root"; exit 1; }
+
+      - name: Publish release (create, or refresh asset if it exists)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${{ steps.m.outputs.tag }}"
+          zip="${{ steps.m.outputs.zip }}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag already exists - refreshing asset."
+            gh release upload "$tag" "$zip" --clobber
+          else
+            echo "Creating release $tag."
+            gh release create "$tag" "$zip" \
+              --title "$tag" \
+              --notes "Automated release of ${{ steps.m.outputs.module }} ${{ steps.m.outputs.version }}."
+          fi
