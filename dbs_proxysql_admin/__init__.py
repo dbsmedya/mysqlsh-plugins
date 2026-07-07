@@ -62,4 +62,10 @@ Example configuration file:
     password = radmin
     default_hostgroup = 0
     excluded_users = root, admin, mysql.sys
+    required_host = %
+
+    required_host selects which mysql.user Host row is synchronized (MySQL
+    accounts are keyed by User AND Host). Only accounts with that exact Host
+    value are synced. Changing it later can rewrite already-synced ProxySQL
+    passwords with the new host row's values; see README.md.
 """

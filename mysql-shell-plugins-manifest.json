@@ -9,8 +9,16 @@
       "moduleName": "dbs_proxysql_admin",
       "caption": "DBS ProxySQL User Admin",
       "description": "Synchronize MySQL users with ProxySQL - full sync, password updates, orphan cleanup, multi-target configuration and a setup wizard. Commands under dbs.proxysql.admin; legacy dbs_proxysql_admin.create() kept for compatibility.",
-      "latestVersion": "1.0.0",
+      "latestVersion": "1.1.0",
       "versions": [
+        {
+          "version": "1.1.0",
+          "developmentStage": "GA",
+          "shellVersionMin": "8.0.21",
+          "urls": {
+            "community": "https://github.com/dbsmedya/mysqlsh-plugins/releases/download/v1.1.0/dbs_proxysql_admin-1.1.0.zip"
+          }
+        },
         {
           "version": "1.0.0",
           "developmentStage": "GA",

@@ -26,6 +26,11 @@ from dbs_proxysql_admin.load_proxysql_config import (
     load_proxysql_config_from
 )
 
+# Authentication plugins whose authentication_string is a password hash that
+# ProxySQL can use. Anything else (auth_socket, authentication_ldap_*, ...)
+# stores non-password data there and must never land in mysql_users.password.
+SUPPORTED_AUTH_PLUGINS = ("mysql_native_password", "caching_sha2_password")
+
 
 class UserAdmin:
     """Manage synchronization between MySQL and ProxySQL users.
@@ -62,6 +67,11 @@ class UserAdmin:
         # Get excluded users list from config or use defaults
         default_excluded = ['root', 'admin', 'mysql.sys', 'mysql.session', 'mysql.infoschema']
         self._excluded_users: List[str] = self._cfg.get("excluded_users", default_excluded)
+
+        # Only accounts on this mysql.user host pattern are synchronized;
+        # mysql.user is keyed by (User, Host), so a single host must be picked
+        # to make the synced password deterministic.
+        self._required_host: str = str(self._cfg.get("required_host", "%")) or "%"
 
     def _load_config(self, config_path: Optional[str] = None) -> Dict[str, Any]:
         """Load configuration from file.
@@ -158,18 +168,77 @@ class UserAdmin:
         return {row[0]: row[1] for row in res.fetch_all()}
 
     def _apply_proxysql_changes(self, px_session: Any) -> None:
-        """Apply changes to ProxySQL runtime and persist to disk.
+        """Persist pending mysql_users changes, then publish them to runtime.
+
+        SAVE-first ordering: the disk write is the failure-prone step (e.g. a
+        full disk) and must complete before anything goes live. A SAVE failure
+        rolls the memory layer back, so nothing is persisted or published. A
+        LOAD failure after a successful SAVE leaves the changes staged
+        consistently in memory and on disk (they would activate on the next
+        ProxySQL restart), so no rollback is attempted; the operator is warned
+        loudly to publish manually.
 
         Args:
             px_session: ProxySQL session object.
         """
-        px_session.run_sql("LOAD MYSQL USERS TO RUNTIME")
-        px_session.run_sql("SAVE MYSQL USERS TO DISK")
+        try:
+            px_session.run_sql("SAVE MYSQL USERS TO DISK")
+        except Exception:
+            self._rollback_proxysql_changes(px_session)
+            raise
+        try:
+            px_session.run_sql("LOAD MYSQL USERS TO RUNTIME")
+        except Exception as e:
+            message = (
+                "mysql_users changes were saved to ProxySQL's disk database "
+                "but LOAD MYSQL USERS TO RUNTIME failed - the changes are "
+                f"NOT live yet ({e}). Run 'LOAD MYSQL USERS TO RUNTIME' on "
+                "the ProxySQL admin interface to activate them now; "
+                "otherwise they activate on the next ProxySQL restart."
+            )
+            print(f"[proxysqlAdmin] WARNING: {message}")
+            raise Exception(message) from e
+
+    def _rollback_proxysql_changes(self, px_session: Any) -> None:
+        """Discard pending mysql_users changes in the admin memory layer.
+
+        Without this, a half-applied batch stays in the MEMORY table and goes
+        live the next time anyone runs LOAD MYSQL USERS TO RUNTIME.
+
+        SAVE ... FROM RUNTIME is the runtime-to-memory copy in ProxySQL's
+        admin grammar; LOAD ... FROM RUNTIME is a syntax error. The session
+        that hit the original error may be dead, so a failed attempt is
+        retried once on a fresh connection before warning the operator.
+
+        Args:
+            px_session: ProxySQL session object.
+        """
+        try:
+            px_session.run_sql("SAVE MYSQL USERS FROM RUNTIME")
+            return
+        except Exception:
+            pass
+        try:
+            fresh = self._open_proxysql_session()
+            try:
+                fresh.run_sql("SAVE MYSQL USERS FROM RUNTIME")
+            finally:
+                fresh.close()
+        except Exception:
+            print(
+                "[proxysqlAdmin] WARNING: could not discard the partially "
+                "applied mysql_users batch from the ProxySQL admin memory "
+                "layer. Run 'SAVE MYSQL USERS FROM RUNTIME' on the admin "
+                "interface before any LOAD MYSQL USERS TO RUNTIME, or the "
+                "partial batch will go live."
+            )
 
     def _fetch_mysql_users(self) -> Dict[str, str]:
         """Fetch users and their hashed passwords from MySQL server.
 
-        Excludes system users based on the excluded_users configuration.
+        Only accounts whose Host equals the configured required_host and whose
+        authentication plugin produces a ProxySQL-usable hash are returned;
+        users on the excluded_users list are skipped.
 
         Returns:
             Dictionary mapping username to hex-encoded authentication_string.
@@ -178,20 +247,36 @@ class UserAdmin:
 
         # Static query (no bound parameters): MySQL Shell's run_sql placeholder
         # binder miscounts when a query mixes "?" placeholders with quoted
-        # string literals, so the excluded-user filtering is done in Python.
+        # string literals, so all row filtering is done in Python.
         # Keeping the SQL constant also removes any injection surface.
         query = (
-            "SELECT DISTINCT User AS username, hex(authentication_string) "
+            "SELECT User, Host, hex(authentication_string), plugin "
             "FROM mysql.user WHERE LENGTH(authentication_string) > 0"
         )
         res = session.run_sql(query)
 
         excluded = set(self._excluded_users or [])
         return {
-            row[0]: row[1]
+            row[0]: row[2]
             for row in res.fetch_all()
             if row[0] not in excluded
+            and row[1] == self._required_host
+            and row[3] in SUPPORTED_AUTH_PLUGINS
         }
+
+    def _fetch_mysql_usernames(self) -> set:
+        """Fetch every username that exists in mysql.user, on any host.
+
+        Used by delete_orphans: a ProxySQL user is only an orphan when NO
+        MySQL account with that name exists at all, regardless of host,
+        password or authentication plugin.
+
+        Returns:
+            Set of usernames present in mysql.user.
+        """
+        session = self._get_session()
+        res = session.run_sql("SELECT DISTINCT User FROM mysql.user")
+        return {row[0] for row in res.fetch_all()}
 
     def _push_to_proxysql(self, mysql_users: Dict[str, str]) -> Dict[str, Any]:
         """Push MySQL users to ProxySQL.
@@ -212,20 +297,24 @@ class UserAdmin:
             inserted = 0
             updated = 0
 
-            for username, authstr in mysql_users.items():
-                if username not in existing:
-                    px.run_sql(
-                        "INSERT INTO mysql_users(username, password, default_hostgroup) "
-                        "VALUES (?, unhex(?), ?)",
-                        [username, authstr, default_hg],
-                    )
-                    inserted += 1
-                elif existing[username] != authstr:
-                    px.run_sql(
-                        "UPDATE mysql_users SET password = unhex(?) WHERE username = ?",
-                        [authstr, username],
-                    )
-                    updated += 1
+            try:
+                for username, authstr in mysql_users.items():
+                    if username not in existing:
+                        px.run_sql(
+                            "INSERT INTO mysql_users(username, password, default_hostgroup) "
+                            "VALUES (?, unhex(?), ?)",
+                            [username, authstr, default_hg],
+                        )
+                        inserted += 1
+                    elif existing[username] != authstr:
+                        px.run_sql(
+                            "UPDATE mysql_users SET password = unhex(?) WHERE username = ?",
+                            [authstr, username],
+                        )
+                        updated += 1
+            except Exception:
+                self._rollback_proxysql_changes(px)
+                raise
 
             if inserted > 0 or updated > 0:
                 self._apply_proxysql_changes(px)
@@ -267,13 +356,17 @@ class UserAdmin:
             existing = self._fetch_proxysql_users(px)
 
             updated = 0
-            for userhost, authstr in mysql_users.items():
-                if userhost in existing and existing[userhost] != authstr:
-                    px.run_sql(
-                        "UPDATE mysql_users SET password = unhex(?) WHERE username = ?",
-                        [authstr, userhost],
-                    )
-                    updated += 1
+            try:
+                for username, authstr in mysql_users.items():
+                    if username in existing and existing[username] != authstr:
+                        px.run_sql(
+                            "UPDATE mysql_users SET password = unhex(?) WHERE username = ?",
+                            [authstr, username],
+                        )
+                        updated += 1
+            except Exception:
+                self._rollback_proxysql_changes(px)
+                raise
 
             if updated > 0:
                 self._apply_proxysql_changes(px)
@@ -285,20 +378,28 @@ class UserAdmin:
     def delete_orphans(self) -> Dict[str, Any]:
         """Delete users from ProxySQL that don't exist in MySQL.
 
-        Useful for cleanup after users are removed from MySQL.
+        Useful for cleanup after users are removed from MySQL. A user is an
+        orphan only when no mysql.user account with that name exists on ANY
+        host; users on the excluded_users list are never deleted.
 
         Returns:
             Dictionary with operation statistics containing keys:
                 - count: Number of orphaned users deleted
         """
-        mysql_users = self._fetch_mysql_users()
+        mysql_usernames = self._fetch_mysql_usernames()
         px = self._open_proxysql_session()
         try:
             existing = self._fetch_proxysql_users(px)
 
-            extra = set(existing) - set(mysql_users)
-            for username in extra:
-                px.run_sql("DELETE FROM mysql_users WHERE username = ?", [username])
+            excluded = set(self._excluded_users or [])
+            extra = set(existing) - mysql_usernames - excluded
+            try:
+                for username in extra:
+                    px.run_sql(
+                        "DELETE FROM mysql_users WHERE username = ?", [username])
+            except Exception:
+                self._rollback_proxysql_changes(px)
+                raise
 
             if extra:
                 self._apply_proxysql_changes(px)

@@ -323,6 +323,7 @@ def status() -> dict:
         info["proxysql_user"] = cfg.get("user")
         info["default_hostgroup"] = cfg.get("default_hostgroup")
         info["excluded_users"] = cfg.get("excluded_users")
+        info["required_host"] = cfg.get("required_host")
     except Exception as e:
         info["config_in_use"] = "error"
         info["message"] = str(e)
@@ -334,7 +335,8 @@ def create_config(config_path: Optional[str] = None, host: Optional[str] = None,
                   port: Optional[int] = None, user: Optional[str] = None,
                   password: Optional[str] = None,
                   default_hostgroup: Optional[int] = None,
-                  excluded_users: Optional[str] = None) -> dict:
+                  excluded_users: Optional[str] = None,
+                  required_host: Optional[str] = None) -> dict:
     """Create a ProxySQL configuration file, interactively when possible.
 
     In the interactive shell this runs a wizard that asks for the ProxySQL
@@ -352,6 +354,9 @@ def create_config(config_path: Optional[str] = None, host: Optional[str] = None,
         password (str): ProxySQL admin password.
         default_hostgroup (int): Default hostgroup for newly added users.
         excluded_users (str): Comma separated list of users to exclude.
+        required_host (str): mysql.user Host of the accounts to sync, for
+            example % or 10.%. Defaults to %. Changing it later can rewrite
+            already-synced ProxySQL passwords with the new host's values.
 
     Returns:
         dict: The result with success, message, config_source and proxysql keys.
@@ -368,7 +373,8 @@ def create_config(config_path: Optional[str] = None, host: Optional[str] = None,
             "user": user,
             "password": password,
             "default_hostgroup": default_hostgroup,
-            "excluded_users": excluded_users
+            "excluded_users": excluded_users,
+            "required_host": required_host
         }
         provided = {k: v for k, v in provided.items() if v is not None}
 

@@ -75,7 +75,25 @@ jobs:
           unzip -l "$zip" | grep -qE ' __init__\.py$' || { echo "::error::__init__.py missing at zip root"; exit 1; }
           unzip -l "$zip" | grep -qE ' init\.py$'     || { echo "::error::init.py missing at zip root"; exit 1; }
 
-      - name: Publish release (create, or refresh asset if it exists)
+      - name: Extract release notes from CHANGELOG.md
+        run: |
+          set -euo pipefail
+          tag="${{ steps.m.outputs.tag }}"
+          # Take the "## v<version>" section of CHANGELOG.md, if present.
+          if [ -f CHANGELOG.md ]; then
+            awk -v tag="$tag" '
+              $0 == "## " tag { in_section=1; next }
+              in_section && /^## / { exit }
+              in_section { print }
+            ' CHANGELOG.md > release-notes.md
+          fi
+          if [ ! -s release-notes.md ]; then
+            echo "Automated release of ${{ steps.m.outputs.module }} ${{ steps.m.outputs.version }}." > release-notes.md
+          fi
+          echo "Release notes:"
+          cat release-notes.md
+
+      - name: Publish release (create, or refresh asset and notes if it exists)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -83,11 +101,12 @@ jobs:
           tag="${{ steps.m.outputs.tag }}"
           zip="${{ steps.m.outputs.zip }}"
           if gh release view "$tag" >/dev/null 2>&1; then
-            echo "Release $tag already exists - refreshing asset."
+            echo "Release $tag already exists - refreshing asset and notes."
             gh release upload "$tag" "$zip" --clobber
+            gh release edit "$tag" --notes-file release-notes.md
           else
             echo "Creating release $tag."
             gh release create "$tag" "$zip" \
               --title "$tag" \
-              --notes "Automated release of ${{ steps.m.outputs.module }} ${{ steps.m.outputs.version }}."
+              --notes-file release-notes.md
           fi
