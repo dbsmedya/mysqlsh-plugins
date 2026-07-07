@@ -91,6 +91,7 @@ user = radmin
 password = radmin
 default_hostgroup = 0
 excluded_users = root, admin, mysql.sys, mysql.session, mysql.infoschema
+required_host = %
 ```
 
 ### Configuration Options
@@ -103,9 +104,78 @@ excluded_users = root, admin, mysql.sys, mysql.session, mysql.infoschema
 | `password` | ProxySQL admin password | admin |
 | `default_hostgroup` | Default hostgroup for new users | 0 |
 | `excluded_users` | Comma-separated list of MySQL users to exclude | root, admin, mysql.sys, etc. |
+| `required_host` | mysql.user `Host` of the accounts to sync (exact match) | `%` |
 
 Files created by `dbs.proxysql.admin.createConfig()` are written with `0600`
 permissions because they contain the ProxySQL admin password.
+
+### Configuration validation
+
+Config files are validated strictly when loaded, and a broken file fails fast
+with a single error that lists **every** problem found — the file that was
+used, missing or empty required options (`host`, `port`, `user`, `password`),
+malformed values (e.g. a non-numeric `port`), and unknown option names (with a
+"did you mean" suggestion for typos such as `requird_host`). Unknown options
+are a hard error — the `[proxysql]` section accepts exactly the options listed
+above, nothing else. Optional keys (`default_hostgroup`, `excluded_users`,
+`required_host`) fall back to their defaults when omitted.
+
+Comments are allowed as full lines starting with `#` or `;`. Inline comments
+after a value are **not** supported — they become part of the value (passwords
+may legally contain `#` and `;`, so trailing text cannot be stripped) and will
+be rejected by validation on typed options like `port`. A `[DEFAULT]` section
+and any section other than `[proxysql]` are also rejected.
+
+When the interactive shell offers to recreate a broken config with the wizard,
+the previous file is first backed up to `<file>.bak` so existing credentials
+are never lost.
+
+### Failure handling during sync
+
+Changes to ProxySQL's `mysql_users` are applied in two steps, **persist first,
+then publish**: `SAVE MYSQL USERS TO DISK` runs before `LOAD MYSQL USERS TO
+RUNTIME`. If a statement fails mid-batch, the pending changes are discarded
+from the admin memory layer (`SAVE MYSQL USERS FROM RUNTIME`, retried on a
+fresh connection if needed) so a later manual `LOAD ... TO RUNTIME` cannot
+publish a half-applied batch. If the disk save fails, nothing goes live. If
+the disk save succeeds but the runtime load fails, the changes are staged
+consistently on disk and in memory but are **not live** — a loud warning tells
+the operator to run `LOAD MYSQL USERS TO RUNTIME` manually (they would
+otherwise activate on the next ProxySQL restart). Avoid running syncs while
+another admin session has unsaved edits staged in `mysql_users`: the discard
+step copies the whole runtime table back over the memory layer. In the interactive shell, a broken config triggers an
+offer to recreate the file with the wizard on the spot; otherwise fix the file
+by hand or run `dbs.proxysql.admin.createConfig()` to rebuild it from scratch.
+Note that a broken file at a default search location is reported as an error —
+it is never silently skipped in favor of the next location, and a
+`PROXYSQL_SYNC_CONFIG` variable pointing to a missing file is also an error.
+
+### The `required_host` option
+
+MySQL accounts are keyed by *(User, Host)*: `'app'@'%'` and `'app'@'10.%'` are
+two different accounts that can hold two different passwords, while ProxySQL's
+`mysql_users` table is keyed by username alone. `required_host` picks which
+host row is synchronized so that the password written to ProxySQL is always
+deterministic. Only accounts whose `Host` **exactly equals** `required_host`
+are synced (no pattern matching is applied); accounts on other hosts are
+ignored by `userSync` / `updatePasswords`.
+
+Notes and edge cases:
+
+- **Changing `required_host` on an existing setup can cause password
+  mismatches.** ProxySQL entries synced under the previous value keep the old
+  host row's passwords until the next `userSync` / `updatePasswords` run, which
+  then overwrites them with the new host row's passwords. If the two host rows
+  hold different passwords, applications authenticating through ProxySQL with
+  the old password will start failing. Compare both host rows in `mysql.user`
+  before changing this value.
+- `deleteOrphans` is intentionally **not** restricted by `required_host`: a
+  ProxySQL user is only deleted when no `mysql.user` account with that username
+  exists on *any* host. Users listed in `excluded_users` are never deleted.
+- Only `mysql_native_password` and `caching_sha2_password` accounts are synced;
+  accounts using other authentication plugins (e.g. `auth_socket`) are skipped
+  because their `authentication_string` is not a password hash ProxySQL can
+  use.
 
 ### ProxySQL admin must accept remote connections
 
@@ -308,7 +378,9 @@ Update passwords in ProxySQL for users that exist in both systems.
 
 ### `dbs.proxysql.admin.deleteOrphans(config_path=None)`
 
-Delete users from ProxySQL that no longer exist in MySQL.
+Delete users from ProxySQL that no longer exist in MySQL. A user is only
+considered an orphan when no `mysql.user` account with that username exists on
+*any* host. Users listed in `excluded_users` are never deleted.
 
 **Returns:** `{success, message, users_deleted, config_source}`
 
@@ -332,6 +404,7 @@ Show which configuration is currently in effect.
     "proxysql_user": <str>,
     "default_hostgroup": <int>,
     "excluded_users": [ ... ],
+    "required_host": <str>,
     "mysql_session_connected": True/False
 }
 ```
@@ -350,7 +423,7 @@ Clear the active configuration so commands fall back to the default search.
 
 **Returns:** `{success, message}`
 
-### `dbs.proxysql.admin.createConfig(config_path=None, host=None, port=None, user=None, password=None, default_hostgroup=None, excluded_users=None)`
+### `dbs.proxysql.admin.createConfig(config_path=None, host=None, port=None, user=None, password=None, default_hostgroup=None, excluded_users=None, required_host=None)`
 
 Create a configuration file. In the interactive shell, omitted values are
 prompted for (the password input is hidden); provide any argument to skip that

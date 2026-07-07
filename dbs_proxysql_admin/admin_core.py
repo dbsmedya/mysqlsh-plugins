@@ -20,6 +20,8 @@ configuration is kept in a module global, so it is naturally scoped to a single
 MySQL Shell session and resets when the shell restarts.
 """
 
+import os
+import shutil
 import threading
 from typing import Any, Dict, Optional, Tuple
 
@@ -28,7 +30,10 @@ import mysqlsh
 from dbs_proxysql_admin.load_proxysql_config import (
     DEFAULT_CONFIG,
     DEFAULT_WRITE_PATH,
+    ENV_CONFIG_VAR,
+    ConfigValidationError,
     find_existing_config,
+    load_proxysql_config_from,
     save_proxysql_config,
 )
 
@@ -127,21 +132,31 @@ def run_config_wizard(config_path: Optional[str] = None,
         else:
             config_path = str(DEFAULT_WRITE_PATH)
 
+    def _as_int(value, label):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            raise ValueError(f"{label} must be an integer, got '{value}'")
+
     host = _resolve_field(
         provided.get("host"), "ProxySQL admin host",
         DEFAULT_CONFIG["host"], interactive)
-    port = int(_resolve_field(
+    port = _as_int(_resolve_field(
         provided.get("port"), "ProxySQL admin port",
-        DEFAULT_CONFIG["port"], interactive))
+        DEFAULT_CONFIG["port"], interactive), "port")
     user = _resolve_field(
         provided.get("user"), "ProxySQL admin user",
         DEFAULT_CONFIG["user"], interactive)
     password = _resolve_field(
         provided.get("password"), "ProxySQL admin password",
         DEFAULT_CONFIG["password"], interactive, is_password=True)
-    default_hostgroup = int(_resolve_field(
+    default_hostgroup = _as_int(_resolve_field(
         provided.get("default_hostgroup"), "Default hostgroup for new users",
-        DEFAULT_CONFIG["default_hostgroup"], interactive))
+        DEFAULT_CONFIG["default_hostgroup"], interactive), "default_hostgroup")
+    required_host = _resolve_field(
+        provided.get("required_host"),
+        "MySQL account host to sync, e.g. % or 10.%",
+        DEFAULT_CONFIG["required_host"], interactive)
 
     excluded = provided.get("excluded_users")
     if excluded is None:
@@ -160,25 +175,81 @@ def run_config_wizard(config_path: Optional[str] = None,
         "password": password,
         "default_hostgroup": default_hostgroup,
         "excluded_users": excluded_list,
+        "required_host": required_host,
     }
 
     path = save_proxysql_config(config_path, values)
     return path, values
 
 
-def ensure_config(config_path: Optional[str], interactive: bool) -> Optional[str]:
-    """Resolve a usable config path, offering the wizard when none exists.
+def _offer_config_wizard(path: str, error_text: str,
+                         backup: bool) -> Optional[str]:
+    """Show the config error and offer to (re)create the file at ``path``.
 
-    Returns an explicit path, or None to mean the loader should use its default
-    search. When no configuration is available the wizard is offered in
-    interactive mode; otherwise a FileNotFoundError is raised.
+    Returns the written path when the user accepts, or None when declined.
+    With ``backup`` the existing (broken) file is copied to <path>.bak first
+    so hand-entered credentials are never lost.
+    """
+    print(error_text)
+    verb = "Recreate" if backup else "Create"
+    answer = prompt(
+        f"{verb} this configuration file with the wizard now? [y/N]: ",
+        {"defaultValue": "n"}).strip().lower()
+    if answer not in ("y", "yes"):
+        return None
+    if backup:
+        backup_path = f"{path}.bak"
+        try:
+            shutil.copy2(path, backup_path)
+            print(f"Backed up the previous file to: {backup_path}")
+        except OSError:
+            pass
+    new_path, _ = run_config_wizard(path, interactive=True)
+    print(f"{verb}d ProxySQL config: {new_path}")
+    return new_path
+
+
+def ensure_config(config_path: Optional[str], interactive: bool) -> Optional[str]:
+    """Resolve and validate a usable config path, offering the wizard on failure.
+
+    The resolved configuration (explicit path, active path, or the first file
+    found by the default search) is validated strictly so that a broken file
+    fails fast. In interactive mode a broken or missing file triggers an offer
+    to (re)create it with the wizard — including when PROXYSQL_SYNC_CONFIG
+    points to a non-existent file; when no configuration exists at all the
+    creation wizard is offered. Non-interactively the validation error (or a
+    FileNotFoundError) propagates to the caller.
     """
     path = resolve_config_path(config_path)
-    if path:
-        return path
+    if not path:
+        try:
+            existing = find_existing_config()
+        except FileNotFoundError as exc:
+            env_path = os.getenv(ENV_CONFIG_VAR)
+            if interactive and env_path:
+                created = _offer_config_wizard(env_path, str(exc), backup=False)
+                if created:
+                    return created
+            raise
+        if existing is not None:
+            path = str(existing)
 
-    if find_existing_config() is not None:
-        return None
+    if path:
+        try:
+            load_proxysql_config_from(path)
+        except ConfigValidationError as exc:
+            if interactive:
+                created = _offer_config_wizard(path, str(exc), backup=True)
+                if created:
+                    return created
+            raise
+        except FileNotFoundError as exc:
+            if interactive:
+                created = _offer_config_wizard(path, str(exc), backup=False)
+                if created:
+                    return created
+            raise
+        return path
 
     if interactive:
         answer = prompt(
